@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>odrive_ros</name>
-  <version>0.8.2</version>
+  <version>0.8.1</version>
   <description>ODrive motor controller driver for ROS</description>
   <license>Modified BSD</license>
 
@@ -22,7 +22,7 @@
   <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>diagnostic_updater</exec_depend>
 
-  <exec_depend>odrive_ros</exec_depend>
+  <!-- <exec_depend>odrive_ros</exec_depend> -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -14,7 +14,7 @@ from sensor_msgs.msg import JointState
 import std_srvs.srv
 
 # looks like this isn't quite ready for eloquent?
-#import diagnostic_updater, diagnostic_msgs.msg
+import diagnostic_updater, diagnostic_msgs.msg
 
 import time
 import math
@@ -92,8 +92,8 @@ class ODriveNode(Node):
         self.tyre_circumference = float(self.get_parameter_or('~tyre_circumference', 0.341)) # used to translate velocity commands in m/s into motor rpm
         
         self.connect_on_startup   = self.get_parameter_or('~connect_on_startup', False)
-        #self.calibrate_on_startup = self.get_parameter_or('~calibrate_on_startup', False)
-        #self.engage_on_startup    = self.get_parameter_or('~engage_on_startup', False)
+        self.calibrate_on_startup = self.get_parameter_or('~calibrate_on_startup', False)
+        self.engage_on_startup    = self.get_parameter_or('~engage_on_startup', False)
         
         self.has_preroll     = self.get_parameter_or('~use_preroll', True)
                 
@@ -131,9 +131,9 @@ class ODriveNode(Node):
         self.publish_diagnostics = True
         if self.publish_diagnostics:
             self.get_logger().warn("Skipping diagnostics until eloquent release is available")
-        #    self.diagnostic_updater = diagnostic_updater.Updater()
-        #    self.diagnostic_updater.setHardwareID("Not connected, unknown")
-        #    self.diagnostic_updater.add("ODrive Diagnostics", self.pub_diagnostics)
+            self.diagnostic_updater = diagnostic_updater.Updater(self, period=1.0)
+            self.diagnostic_updater.setHardwareID("Not connected, unknown")
+            self.diagnostic_updater.add("ODrive Diagnostics", self.pub_diagnostics)
         
         if self.publish_temperatures:
             self.temperature_publisher_left  = self.create_publisher(Float64, 'left/temperature', qos_profile=10)
@@ -214,7 +214,11 @@ class ODriveNode(Node):
             #jsm.name.resize(2)
             #jsm.position.resize(2)
             jsm.name = ['joint_left_wheel','joint_right_wheel']
-            jsm.position = [0.0, 0.0]            
+            jsm.position = [0.0, 0.0]
+        
+        self.fast_timer = None
+        # start things up
+        self.main_loop()
 
         
     def main_loop(self):
@@ -249,7 +253,7 @@ class ODriveNode(Node):
                         self.get_logger().error(error_string)
                         self.driver.disconnect()
                         self.status = "disconnected"
-                        self.status_pub.publish(self.status)
+                        self.status_pub.publish(String(data=self.status))
                         self.driver = None
                     else:
                         # must have called connect service from another node
@@ -257,12 +261,12 @@ class ODriveNode(Node):
                 except (ChannelBrokenException, ChannelDamagedException, AttributeError):
                     self.get_logger().error("ODrive USB connection failure in main_loop.")
                     self.status = "disconnected"
-                    self.status_pub.publish(self.status)
+                    self.status_pub.publish(String(data=self.status))
                     self.driver = None
                 except:
                     self.get_logger().error("Unknown errors accessing ODrive:" + traceback.format_exc())
                     self.status = "disconnected"
-                    self.status_pub.publish(self.status)
+                    self.status_pub.publish(String(data=self.status))
                     self.driver = None
             
             if not self.driver:
@@ -275,8 +279,8 @@ class ODriveNode(Node):
                     continue
 
                 # TODO add back in when ready 
-                #if self.publish_diagnostics:
-                #    self.diagnostic_updater.setHardwareID(self.driver.get_version_string())
+                if self.publish_diagnostics:
+                    self.diagnostic_updater.setHardwareID(self.driver.get_version_string())
             
             else:
                 pass # loop around and try again
@@ -333,7 +337,7 @@ class ODriveNode(Node):
                 self.get_logger().error("ODrive USB connection failure in fast_timer." + traceback.format_exc(1))
                 self.fast_timer_comms_active = False
                 self.status = "disconnected"
-                self.status_pub.publish(self.status)
+                self.status_pub.publish(String(data=self.status))
                 self.driver = None
             except:
                 self.get_logger().error("Fast timer ODrive failure:" + traceback.format_exc())
@@ -351,8 +355,8 @@ class ODriveNode(Node):
             self.pub_joint_angles(time_now)
         
         # TODO add back in when ready
-        #if self.publish_diagnostics:
-        #    self.diagnostic_updater.update()
+        if self.publish_diagnostics:
+            self.diagnostic_updater.update()
         
         try:
             # check and stop motor if no vel command has been received in > 1s
@@ -586,22 +590,22 @@ class ODriveNode(Node):
         
         # https://github.com/ros/common_msgs/blob/jade-devel/diagnostic_msgs/msg/DiagnosticStatus.msg
         # TODO add this back when eloquent has it...
-        # if self.status == "disconnected":
-        #     stat.summary(diagnostic_msgs.msg.DiagnosticStatus.WARN, "Not connected")
-        # else:
-        #     if self.i2t_error_latch:
-        #         stat.summary(diagnostic_msgs.msg.DiagnosticStatus.ERROR, "i2t overheated, drive ignored until cool")
-        #     elif self.left_energy_acc > self.i2t_warning_threshold:
-        #         stat.summary(diagnostic_msgs.msg.DiagnosticStatus.WARN, "Left motor over i2t warning threshold")
-        #     elif self.left_energy_acc > self.i2t_error_threshold:
-        #         stat.summary(diagnostic_msgs.msg.DiagnosticStatus.ERROR, "Left motor over i2t error threshold")
-        #     elif self.right_energy_acc > self.i2t_warning_threshold:
-        #         stat.summary(diagnostic_msgs.msg.DiagnosticStatus.WARN, "Right motor over i2t warning threshold")
-        #     elif self.right_energy_acc > self.i2t_error_threshold:
-        #         stat.summary(diagnostic_msgs.msg.DiagnosticStatus.ERROR, "Right motor over i2t error threshold")
-        #     # Everything is okay:
-        #     else:
-        #         stat.summary(diagnostic_msgs.msg.DiagnosticStatus.OK, "Running")
+        if self.status == "disconnected":
+            stat.summary(diagnostic_msgs.msg.DiagnosticStatus.WARN, "Not connected")
+        else:
+            if self.i2t_error_latch:
+                stat.summary(diagnostic_msgs.msg.DiagnosticStatus.ERROR, "i2t overheated, drive ignored until cool")
+            elif self.left_energy_acc > self.i2t_warning_threshold:
+                stat.summary(diagnostic_msgs.msg.DiagnosticStatus.WARN, "Left motor over i2t warning threshold")
+            elif self.left_energy_acc > self.i2t_error_threshold:
+                stat.summary(diagnostic_msgs.msg.DiagnosticStatus.ERROR, "Left motor over i2t error threshold")
+            elif self.right_energy_acc > self.i2t_warning_threshold:
+                stat.summary(diagnostic_msgs.msg.DiagnosticStatus.WARN, "Right motor over i2t warning threshold")
+            elif self.right_energy_acc > self.i2t_error_threshold:
+                stat.summary(diagnostic_msgs.msg.DiagnosticStatus.ERROR, "Right motor over i2t error threshold")
+            # Everything is okay:
+            else:
+                stat.summary(diagnostic_msgs.msg.DiagnosticStatus.OK, "Running")
         
         
     def pub_temperatures(self):
