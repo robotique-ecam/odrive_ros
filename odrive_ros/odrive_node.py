@@ -265,8 +265,8 @@ class ODriveNode(Node):
                     # TODO: try resetting errors and recalibrating, not just a full disconnection
                     error_string = self.driver.get_errors(clear=True)
                     if error_string:
-                        self.get_logger().error("Had errors, disconnecting and retrying connection.")
-                        self.get_logger().error(error_string)
+                        self._logger.error("Had errors, disconnecting and retrying connection.")
+                        self._logger.error(error_string)
                         self.driver.disconnect()
                         self.status = "disconnected"
                         self.status_pub.publish(String(data=self.status))
@@ -275,12 +275,12 @@ class ODriveNode(Node):
                         # must have called connect service from another node
                         self.fast_timer_comms_active = True
                 except (ChannelBrokenException, ChannelDamagedException, AttributeError):
-                    self.get_logger().error("ODrive USB connection failure in main_loop.")
+                    self._logger.error("ODrive USB connection failure in main_loop.")
                     self.status = "disconnected"
                     self.status_pub.publish(String(data=self.status))
                     self.driver = None
                 except:
-                    self.get_logger().error("Unknown errors accessing ODrive:" + traceback.format_exc())
+                    self._logger.error("Unknown errors accessing ODrive:" + traceback.format_exc())
                     self.status = "disconnected"
                     self.status_pub.publish(String(data=self.status))
                     self.driver = None
@@ -291,7 +291,7 @@ class ODriveNode(Node):
                     continue
                 
                 if not self.connect_driver(std_srvs.srv.Trigger.Request(), std_srvs.srv.Trigger.Response())[0]:
-                    self.get_logger().error("Failed to connect.") # TODO: can we check for timeout here?
+                    self._logger.error("Failed to connect.") # TODO: can we check for timeout here?
                     continue
 
                 # TODO add back in when ready 
@@ -511,7 +511,7 @@ class ODriveNode(Node):
             self._logger.error('Error while disconnecting: {}'.format(traceback.format_exc()))
         finally:
             self.status = "disconnected"
-            self.status_pub.publish(String(data=self.status_pub))
+            self.status_pub.publish(String(data=self.status))
             self.driver = None
         
         resp.success = True
