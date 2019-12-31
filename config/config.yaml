@@ -1,0 +1,3 @@
+odrive_ros:
+  wheel_track: 0.285
+  tire_circumference: 0.341

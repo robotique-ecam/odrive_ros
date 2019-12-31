@@ -83,141 +83,157 @@ class ODriveNode(Node):
         # When enabled, output simulated odometry and joint angles (TODO: do joint angles anyway from ?)
         self.sim_mode = False
 
-        self.sim_mode             = self.get_parameter_or('simulation_mode', False)
-        self.publish_joint_angles = self.get_parameter_or('publish_joint_angles', True) # if self.sim_mode else False
-        self.publish_temperatures = self.get_parameter_or('publish_temperatures', True)
-        
-        self.axis_for_right = float(self.get_parameter_or('~axis_for_right', 0)) # if right calibrates first, this should be 0, else 1
-        self.wheel_track = float(self.get_parameter_or('~wheel_track', 0.285)) # m, distance between wheel centres
-        self.tyre_circumference = float(self.get_parameter_or('~tyre_circumference', 0.341)) # used to translate velocity commands in m/s into motor rpm
-        
-        self.connect_on_startup   = self.get_parameter_or('~connect_on_startup', False)
-        self.calibrate_on_startup = self.get_parameter_or('~calibrate_on_startup', False)
-        self.engage_on_startup    = self.get_parameter_or('~engage_on_startup', False)
-        
-        self.has_preroll     = self.get_parameter_or('~use_preroll', True)
-                
-        self.publish_current = self.get_parameter_or('~publish_current', True)
-        self.publish_raw_odom =self.get_parameter_or('~publish_raw_odom', True)
-        
-        self.publish_odom    = self.get_parameter_or('~publish_odom', True)
-        self.publish_tf      = self.get_parameter_or('~publish_odom_tf', False)
-        self.odom_topic      = self.get_parameter_or('~odom_topic', "odom")
-        self.odom_frame      = self.get_parameter_or('~odom_frame', "odom")
-        self.base_frame      = self.get_parameter_or('~base_frame', "base_link")
-        self.odom_calc_hz    = self.get_parameter_or('~odom_calc_hz', 10)
-        
-        rclpy.get_default_context().on_shutdown(self.terminate)
+        try:
+            self.sim_mode             = self.get_parameter_or('simulation_mode', False)
+            self.publish_joint_angles = self.get_parameter_or('publish_joint_angles', True) # if self.sim_mode else False
+            self.publish_temperatures = self.get_parameter_or('publish_temperatures', True)
+            
+            self.axis_for_right = float(self.get_parameter_or('~axis_for_right', 0)) # if right calibrates first, this should be 0, else 1
+            self.wheel_track = float(self.get_parameter_or('~wheel_track', 0.285)) # m, distance between wheel centres
+            self.tyre_circumference = float(self.get_parameter_or('~tyre_circumference', 0.341)) # used to translate velocity commands in m/s into motor rpm
+            
+            self.connect_on_startup   = self.get_parameter_or('~connect_on_startup', False)
+            self.calibrate_on_startup = self.get_parameter_or('~calibrate_on_startup', False)
+            self.engage_on_startup    = self.get_parameter_or('~engage_on_startup', False)
+            
+            self.has_preroll     = self.get_parameter_or('~use_preroll', True)
+                    
+            self.publish_current = self.get_parameter_or('~publish_current', True)
+            self.publish_raw_odom =self.get_parameter_or('~publish_raw_odom', True)
+            
+            self.publish_odom    = self.get_parameter_or('~publish_odom', False)
+            self.publish_tf      = self.get_parameter_or('~publish_odom_tf', False)
+            self.odom_topic      = self.get_parameter_or('~odom_topic', "odom")
+            self.odom_frame      = self.get_parameter_or('~odom_frame', "odom")
+            self.base_frame      = self.get_parameter_or('~base_frame', "base_link")
+            self.odom_calc_hz    = self.get_parameter_or('~odom_calc_hz', 10)
+            
+            rclpy.get_default_context().on_shutdown(self.terminate)
 
+            
+            self.create_service(std_srvs.srv.Trigger, 'connect_driver', self.connect_driver)
+            self.create_service(std_srvs.srv.Trigger, 'disconnect_driver', self.disconnect_driver)
         
-        self.create_service(std_srvs.srv.Trigger, 'connect_driver', self.connect_driver)
-        self.create_service(std_srvs.srv.Trigger, 'disconnect_driver', self.disconnect_driver)
-    
-        self.create_service(std_srvs.srv.Trigger, 'calibrate_motors', self.calibrate_motor)
-        self.create_service(std_srvs.srv.Trigger, 'engage_motors', self.engage_motor)
-        self.create_service(std_srvs.srv.Trigger, 'release_motors', self.release_motor)
+            self.create_service(std_srvs.srv.Trigger, 'calibrate_motors', self.calibrate_motor)
+            self.create_service(std_srvs.srv.Trigger, 'engage_motors', self.engage_motor)
+            self.create_service(std_srvs.srv.Trigger, 'release_motors', self.release_motor)
+                    
+            # odometry update, disable during preroll, whenever wheels off ground 
+            self.odometry_update_enabled = True
+            self.create_service(std_srvs.srv.SetBool, 'enable_odometry_updates', self.enable_odometry_update_service)
+            
+            self.status_pub = self.create_publisher(String, 'status', qos_profile=10)
+            self.status = "disconnected"
+            self.status_pub.publish(String(data=self.status))
+            
+            self.command_queue = Queue(maxsize=5)
+            self.vel_subscribe = self.create_subscription(Twist, "/cmd_vel", self.cmd_vel_callback, qos_profile=10)
+            
+            self.publish_diagnostics = False
+            if self.publish_diagnostics:
+                self.get_logger().warn("Skipping diagnostics until eloquent release is available")
+                self.diagnostic_updater = diagnostic_updater.Updater(self, period=1.0)
+                self.diagnostic_updater.setHardwareID("Not connected, unknown")
+                self.diagnostic_updater.add("ODrive Diagnostics", self.pub_diagnostics)
+            
+            if self.publish_temperatures:
+                self.temperature_publisher_left  = self.create_publisher(Float64, 'left/temperature', qos_profile=10)
+                self.temperature_publisher_right = self.create_publisher(Float64, 'right/temperature', qos_profile=10)
+            
+            self.i2t_error_latch = False
+            if self.publish_current:
+                #self.current_loop_count = 0
+                #self.left_current_accumulator  = 0.0
+                #self.right_current_accumulator = 0.0
+                self.current_publisher_left  = self.create_publisher(Float64, 'left/current', qos_profile=10)
+                self.current_publisher_right = self.create_publisher(Float64, 'right/current', qos_profile=10)
+                self.i2t_publisher_left  = self.create_publisher(Float64, 'left/i2t', qos_profile=10)
+                self.i2t_publisher_right = self.create_publisher(Float64, 'right/i2t', qos_profile=10)
                 
-        # odometry update, disable during preroll, whenever wheels off ground 
-        self.odometry_update_enabled = True
-        self.create_service(std_srvs.srv.SetBool, 'enable_odometry_updates', self.enable_odometry_update_service)
-        
-        self.status_pub = self.create_publisher(String, 'status', qos_profile=10)
-        self.status = "disconnected"
-        self.status_pub.publish(String(data=self.status))
-        
-        self.command_queue = Queue(maxsize=5)
-        self.vel_subscribe = self.create_subscription(Twist, "/cmd_vel", self.cmd_vel_callback, qos_profile=10)
-        
-        self.publish_diagnostics = True
-        if self.publish_diagnostics:
-            self.get_logger().warn("Skipping diagnostics until eloquent release is available")
-            self.diagnostic_updater = diagnostic_updater.Updater(self, period=1.0)
-            self.diagnostic_updater.setHardwareID("Not connected, unknown")
-            self.diagnostic_updater.add("ODrive Diagnostics", self.pub_diagnostics)
-        
-        if self.publish_temperatures:
-            self.temperature_publisher_left  = self.create_publisher(Float64, 'left/temperature', qos_profile=10)
-            self.temperature_publisher_right = self.create_publisher(Float64, 'right/temperature', qos_profile=10)
-        
-        self.i2t_error_latch = False
-        if self.publish_current:
-            #self.current_loop_count = 0
-            #self.left_current_accumulator  = 0.0
-            #self.right_current_accumulator = 0.0
-            self.current_publisher_left  = self.create_publisher(Float64, 'left/current', qos_profile=10)
-            self.current_publisher_right = self.create_publisher(Float64, 'right/current', qos_profile=10)
-            self.i2t_publisher_left  = self.create_publisher(Float64, 'left/i2t', qos_profile=10)
-            self.i2t_publisher_right = self.create_publisher(Float64, 'right/i2t', qos_profile=10)
+                self.get_logger().debug("ODrive will publish motor currents.")
+                
+                self.i2t_resume_threshold  = self.get_parameter_or('~i2t_resume_threshold',  222)            
+                self.i2t_warning_threshold = self.get_parameter_or('~i2t_warning_threshold', 333)
+                self.i2t_error_threshold   = self.get_parameter_or('~i2t_error_threshold',   666)
             
-            self.get_logger().debug("ODrive will publish motor currents.")
+            self.last_cmd_vel_time = self._clock.now()
             
-            self.i2t_resume_threshold  = self.get_parameter_or('~i2t_resume_threshold',  222)            
-            self.i2t_warning_threshold = self.get_parameter_or('~i2t_warning_threshold', 333)
-            self.i2t_error_threshold   = self.get_parameter_or('~i2t_error_threshold',   666)
-        
-        self.last_cmd_vel_time = self._clock.now()
-        
-        if self.publish_raw_odom:
-            self.raw_odom_publisher_encoder_left  = self.create_publisher(Int32, 'left/raw_odom/encoder', qos_profile=10) if self.publish_raw_odom else None
-            self.raw_odom_publisher_encoder_right = self.create_publisher(Int32, 'right/raw_odom/encoder', qos_profile=10) if self.publish_raw_odom else None
-            self.raw_odom_publisher_vel_left      = self.create_publisher(Int32, 'left/raw_odom/velocity', qos_profile=10) if self.publish_raw_odom else None
-            self.raw_odom_publisher_vel_right     = self.create_publisher(Int32, 'right/raw_odom/velocity', qos_profile=10) if self.publish_raw_odom else None
-                            
-        if self.publish_odom:
-            self.create_service(std_srvs.srv.Trigger, 'reset_odometry', self.reset_odometry)
-            self.old_pos_l = 0
-            self.old_pos_r = 0
+            if self.publish_raw_odom:
+                self.raw_odom_publisher_encoder_left  = self.create_publisher(Int32, 'left/raw_odom/encoder', qos_profile=10) if self.publish_raw_odom else None
+                self.raw_odom_publisher_encoder_right = self.create_publisher(Int32, 'right/raw_odom/encoder', qos_profile=10) if self.publish_raw_odom else None
+                self.raw_odom_publisher_vel_left      = self.create_publisher(Int32, 'left/raw_odom/velocity', qos_profile=10) if self.publish_raw_odom else None
+                self.raw_odom_publisher_vel_right     = self.create_publisher(Int32, 'right/raw_odom/velocity', qos_profile=10) if self.publish_raw_odom else None
+                                
+            if self.publish_odom:
+                self.create_service(std_srvs.srv.Trigger, 'reset_odometry', self.reset_odometry)
+                self.old_pos_l = 0
+                self.old_pos_r = 0
+                
+                self.odom_publisher = self.create_publisher(Odometry, self.odom_topic, qos_profile=10)
+                # setup message
+                self.odom_msg = Odometry()
+                #print(dir(self.odom_msg))
+                self.odom_msg.header.frame_id = self.odom_frame
+                self.odom_msg.child_frame_id = self.base_frame
+                self.odom_msg.pose.pose.position.x = 0.0
+                self.odom_msg.pose.pose.position.y = 0.0
+                self.odom_msg.pose.pose.position.z = 0.0    # always on the ground, we hope
+                self.odom_msg.pose.pose.orientation.x = 0.0 # always vertical
+                self.odom_msg.pose.pose.orientation.y = 0.0 # always vertical
+                self.odom_msg.pose.pose.orientation.z = 0.0
+                self.odom_msg.pose.pose.orientation.w = 1.0
+                self.odom_msg.twist.twist.linear.x = 0.0
+                self.odom_msg.twist.twist.linear.y = 0.0  # no sideways
+                self.odom_msg.twist.twist.linear.z = 0.0  # or upwards... only forward
+                self.odom_msg.twist.twist.angular.x = 0.0 # or roll
+                self.odom_msg.twist.twist.angular.y = 0.0 # or pitch... only yaw
+                self.odom_msg.twist.twist.angular.z = 0.0
+                
+                # store current location to be updated. 
+                self.x = 0.0
+                self.y = 0.0
+                self.theta = 0.0
+                
+                # setup transform
+                self.tf_publisher = tf2_ros.TransformBroadcaster(self)
+                self.tf_msg = TransformStamped()
+                self.tf_msg.header.frame_id = self.odom_frame
+                self.tf_msg.child_frame_id  = self.base_frame
+                self.tf_msg.transform.translation.x = 0.0
+                self.tf_msg.transform.translation.y = 0.0
+                self.tf_msg.transform.translation.z = 0.0
+                self.tf_msg.transform.rotation.x = 0.0
+                self.tf_msg.transform.rotation.y = 0.0
+                self.tf_msg.transform.rotation.w = 0.0
+                self.tf_msg.transform.rotation.z = 1.0
+                
+            if self.publish_joint_angles:
+                self.joint_state_publisher = self.create_publisher(JointState, '/odrive/joint_states', qos_profile=10)
+                
+                jsm = JointState()
+                self.joint_state_msg = jsm
+                #jsm.name.resize(2)
+                #jsm.position.resize(2)
+                jsm.name = ['joint_left_wheel','joint_right_wheel']
+                jsm.position = [0.0, 0.0]
             
-            self.odom_publisher = self.create_publisher(Odometry, self.odom_topic, qos_profile=10)
-            # setup message
-            self.odom_msg = Odometry()
-            #print(dir(self.odom_msg))
-            self.odom_msg.header.frame_id = self.odom_frame
-            self.odom_msg.child_frame_id = self.base_frame
-            self.odom_msg.pose.pose.position.x = 0.0
-            self.odom_msg.pose.pose.position.y = 0.0
-            self.odom_msg.pose.pose.position.z = 0.0    # always on the ground, we hope
-            self.odom_msg.pose.pose.orientation.x = 0.0 # always vertical
-            self.odom_msg.pose.pose.orientation.y = 0.0 # always vertical
-            self.odom_msg.pose.pose.orientation.z = 0.0
-            self.odom_msg.pose.pose.orientation.w = 1.0
-            self.odom_msg.twist.twist.linear.x = 0.0
-            self.odom_msg.twist.twist.linear.y = 0.0  # no sideways
-            self.odom_msg.twist.twist.linear.z = 0.0  # or upwards... only forward
-            self.odom_msg.twist.twist.angular.x = 0.0 # or roll
-            self.odom_msg.twist.twist.angular.y = 0.0 # or pitch... only yaw
-            self.odom_msg.twist.twist.angular.z = 0.0
-            
-            # store current location to be updated. 
-            self.x = 0.0
-            self.y = 0.0
-            self.theta = 0.0
-            
-            # setup transform
-            self.tf_publisher = tf2_ros.TransformBroadcaster(self)
-            self.tf_msg = TransformStamped()
-            self.tf_msg.header.frame_id = self.odom_frame
-            self.tf_msg.child_frame_id  = self.base_frame
-            self.tf_msg.transform.translation.x = 0.0
-            self.tf_msg.transform.translation.y = 0.0
-            self.tf_msg.transform.translation.z = 0.0
-            self.tf_msg.transform.rotation.x = 0.0
-            self.tf_msg.transform.rotation.y = 0.0
-            self.tf_msg.transform.rotation.w = 0.0
-            self.tf_msg.transform.rotation.z = 1.0
-            
-        if self.publish_joint_angles:
-            self.joint_state_publisher = self.create_publisher(JointState, '/odrive/joint_states', qos_profile=10)
-            
-            jsm = JointState()
-            self.joint_state_msg = jsm
-            #jsm.name.resize(2)
-            #jsm.position.resize(2)
-            jsm.name = ['joint_left_wheel','joint_right_wheel']
-            jsm.position = [0.0, 0.0]
-        
-        self.fast_timer = None
+            self.fast_timer = None
+            self.vel_l = 0
+            self.vel_r = 0
+            self.new_pos_l = 0
+            self.new_pos_r = 0
+            self.current_l = 0
+            self.current_r = 0
+            self.temp_v_l = 0.
+            self.temp_v_r = 0.
+            self.motor_state_l = "not connected" # undefined
+            self.motor_state_r = "not connected"
+            self.bus_voltage = 0.
+        except Exception as exc:
+            raise exc
+
         # start things up
+        self._logger.info("starting main loop")
         self.main_loop()
 
         
@@ -271,10 +287,10 @@ class ODriveNode(Node):
             
             if not self.driver:
                 if not self.connect_on_startup:
-                    #self.get_logger().info("ODrive node started, but not connected.")
+                    self._logger.info("ODrive node started, but not connected.")
                     continue
                 
-                if not self.connect_driver(None)[0]:
+                if not self.connect_driver(std_srvs.srv.Trigger.Request(), std_srvs.srv.Trigger.Response())[0]:
                     self.get_logger().error("Failed to connect.") # TODO: can we check for timeout here?
                     continue
 
@@ -426,110 +442,169 @@ class ODriveNode(Node):
     
     
     def terminate(self):
-        if self.fast_timer:
-            self.fast_timer.destroy()
-        if self.driver:
-            self.driver.release()
+        self._logger.info("attempting to terminate")
+        try:
+            if self.fast_timer:
+                self.fast_timer.destroy()
+            if self.driver:
+                self.driver.release()
+        except Exception as exc:
+            self._logger.warn("failed to terminate")
+            raise exc
     
     # ROS services
-    def connect_driver(self, request):
+    def connect_driver(self, request: std_srvs.srv.Trigger.Request, resp:std_srvs.srv.Trigger.Response) -> std_srvs.srv.Trigger.Response:
+        self._logger.info("attempting to connect driver")
+
         if self.driver:
-            return (False, "Already connected.")
-        
-        ODriveClass = ODriveInterfaceAPI if not self.sim_mode else ODriveInterfaceSimulator
-        
-        self.driver = ODriveInterfaceAPI(logger=ROSLogger(self))
-        self.get_logger().info("Connecting to ODrive...")
-        if not self.driver.connect(right_axis=self.axis_for_right):
-            self.driver = None
-            #self.get_logger().error("Failed to connect.")
-            return (False, "Failed to connect.")
+            resp.success = False
+            resp.message = "Already connected."
+            self._logger.warn("already connected")
+            return resp
+        try:
+            ODriveClass = ODriveInterfaceAPI if not self.sim_mode else ODriveInterfaceSimulator
             
-        #self.get_logger().info("ODrive connected.")
-        
-        # okay, connected, 
-        self.m_s_to_value = self.driver.encoder_cpr/self.tyre_circumference
-        
-        if self.publish_odom:
-            self.old_pos_l = self.driver.left_axis.encoder.pos_cpr
-            self.old_pos_r = self.driver.right_axis.encoder.pos_cpr
-        
-        self.fast_timer_comms_active = True
-        
-        self.status = "connected"
-        self.status_pub.publish(String(data=self.status))
-        return (True, "ODrive connected successfully")
+            self.driver = ODriveInterfaceAPI(logger=ROSLogger(self))
+            self._logger.info("Connecting to ODrive...")
+            if not self.driver.connect(right_axis=self.axis_for_right):
+                self.driver = None
+                self._logger.error("Failed to connect.")
+                resp.success = False
+                resp.message = "Failed to connect."
+                return resp
+                
+            self._logger.info("ODrive connected.")
+            
+            # okay, connected, 
+            self.m_s_to_value = self.driver.encoder_cpr/self.tyre_circumference
+            
+            if self.publish_odom:
+                self.old_pos_l = self.driver.left_axis.encoder.pos_cpr
+                self.old_pos_r = self.driver.right_axis.encoder.pos_cpr
+            
+            self.fast_timer_comms_active = True
+            
+            self.status = "connected"
+            self.status_pub.publish(String(data=self.status))
+        except Exception as exc:
+            raise exc
+
+        resp.success = True
+        resp.message = "ODrive connected successfully."
+        return resp
     
-    def disconnect_driver(self, request):
+    def disconnect_driver(self, request: std_srvs.srv.Trigger.Request, resp:std_srvs.srv.Trigger.Response) -> std_srvs.srv.Trigger.Response:
+        self._logger.info("attempting to disconnect driver")
+
         if not self.driver:
-            self.get_logger().error("Not connected.")
-            return (False, "Not connected.")
+            self._logger.error("Not connected.")
+            resp.success = False
+            resp.message = "Not connected."
+            return resp
+        
         try:
             if not self.driver.disconnect():
-                return (False, "Failed disconnection, but try reconnecting.")
+                resp.success = False
+                resp.message = "OdoFailed disconnection, but try reconnecting."
+                return resp
         except:
-            self.get_logger().error('Error while disconnecting: {}'.format(traceback.format_exc()))
+            self._logger.error('Error while disconnecting: {}'.format(traceback.format_exc()))
         finally:
             self.status = "disconnected"
             self.status_pub.publish(String(data=self.status_pub))
             self.driver = None
-        return (True, "Disconnection success.")
-    
-    def calibrate_motor(self, request):
-        if not self.driver:
-            self.get_logger().error("Not connected.")
-            return (False, "Not connected.")
-            
-        if self.has_preroll:
-            self.odometry_update_enabled = False # disable odometry updates while we preroll
-            if not self.driver.preroll(wait=True):
-                self.status = "preroll_fail"
-                self.status_pub.publish(String(data=self.status))
-                return (False, "Failed preroll.")
-            
-            self.status_pub.publish(String(data="ready"))
-            time.sleep(1)
-            self.odometry_update_enabled = True
-        else:
-            if not self.driver.calibrate():
-                return (False, "Failed calibration.")
-                
-        return (True, "Calibration success.")
-    
-    def engage_motor(self, request):
-        if not self.driver:
-            self.get_logger().error("Not connected.")
-            return (False, "Not connected.")
-        if not self.driver.has_prerolled():
-            return (False, "Not prerolled.")
-        if not self.driver.engage():
-            return (False, "Failed to engage motor.")
-        return (True, "Engage motor success.")
-    
-    def release_motor(self, request):
-        if not self.driver:
-            self.get_logger().error("Not connected.")
-            return (False, "Not connected.")
-        if not self.driver.release():
-            return (False, "Failed to release motor.")
-        return (True, "Release motor success.")
         
-    def enable_odometry_update_service(self, request):
+        resp.success = True
+        resp.message = "Disconenction success."
+        return resp
+    
+    def calibrate_motor(self, request: std_srvs.srv.Trigger.Request, resp:std_srvs.srv.Trigger.Response) -> std_srvs.srv.Trigger.Response:
+        self._logger.info("attempting to calibrate motor")
+
+        if not self.driver:
+            self._logger.error("Not conected.")
+            resp.success = False
+            resp.message = "Not connected."
+        
+        try:
+            if self.has_preroll:
+                self.odometry_update_enabled = False # disable odometry updates while we preroll
+                if not self.driver.preroll(wait=True):
+                    self.status = "preroll_fail"
+                    self.status_pub.publish(String(data=self.status))
+                    resp.success = True
+                    resp.message = "Failed preroll."
+                    return resp
+                
+                self.status_pub.publish(String(data="ready"))
+                time.sleep(1)
+                self.odometry_update_enabled = True
+            else:
+                if not self.driver.calibrate():
+                    resp.success = False
+                    resp.message = "Failed calibration."
+                    return resp
+        except Exception as exc:
+            raise exc
+        
+        resp.success = True
+        resp.message = "Calibration success."
+        return resp
+    
+    def engage_motor(self, request: std_srvs.srv.Trigger.Request, resp:std_srvs.srv.Trigger.Response) -> std_srvs.srv.Trigger.Response:
+        if not self.driver:
+            self.get_logger().error("Not connected.")
+            resp.success = False
+            resp.message = "Not connected."
+            return resp
+        if not self.driver.has_prerolled():
+            resp.success = False
+            resp.message = "Not prerolled."
+            return resp
+        if not self.driver.engage():
+            resp.success = False
+            resp.message = "Failed to engage motor."
+            return resp
+
+        resp.success = True
+        resp.message = "Engage motor success."
+        return resp
+    
+    def release_motor(self, request: std_srvs.srv.Trigger.Request, resp:std_srvs.srv.Trigger.Response) -> std_srvs.srv.Trigger.Response:
+        if not self.driver:
+            self.get_logger().error("Not connected.")
+            resp.success = False
+            resp.message = "Not connected."
+            return resp
+        if not self.driver.release():
+            resp.success = False
+            resp.message = "Failed to release motor."
+            return resp
+
+        resp.success = True
+        resp.message = "Release motor success."
+        return resp
+        
+    def enable_odometry_update_service(self, request: std_srvs.srv.Trigger.Request, resp:std_srvs.srv.Trigger.Response) -> std_srvs.srv.Trigger.Response:
         enable = request.data
         
         if enable:
             self.odometry_update_enabled = True
-            return(True, "Odometry enabled.")
+            resp.success = True
+            resp.message = "Odometry enabled."
         else:
             self.odometry_update_enabled = False
-            return(True, "Odometry disabled.")
+            resp.success = True
+            resp.message = "Odometry disabled."
+        return resp
     
-    def reset_odometry(self, request):
+    def reset_odometry(self, request: std_srvs.srv.Trigger.Request, resp:std_srvs.srv.Trigger.Response) -> std_srvs.srv.Trigger.Response:
         self.x = 0.0
         self.y = 0.0
         self.theta = 0.0
-        
-        return(True, "Odometry reset.")
+        resp.success = True
+        resp.message = "Odometry reset."
+        return resp
     
     # Helpers and callbacks
     
@@ -541,9 +616,9 @@ class ODriveNode(Node):
         return left_linear_val, right_linear_val
 
     def cmd_vel_callback(self, msg):
-        #self.get_logger().info("Received a /cmd_vel message!")
-        #self.get_logger().info("Linear Components: [%f, %f, %f]"%(msg.linear.x, msg.linear.y, msg.linear.z))
-        #self.get_logger().info("Angular Components: [%f, %f, %f]"%(msg.angular.x, msg.angular.y, msg.angular.z))
+        self._logger.info("Received a /cmd_vel message!")
+        self._logger.info("Linear Components: [%f, %f, %f]"%(msg.linear.x, msg.linear.y, msg.linear.z))
+        self._logger.info("Angular Components: [%f, %f, %f]"%(msg.angular.x, msg.angular.y, msg.angular.z))
 
         # rostopic pub -r 1 /commands/motor/current std_msgs/Float64 -- -1.0
 
