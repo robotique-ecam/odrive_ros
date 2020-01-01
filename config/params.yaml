@@ -1,0 +1,13 @@
+---
+
+odrive_ros:
+  odrive_node:
+    ros__parameters:
+      wheel_track: 0.285
+      tire_circumference: 0.341
+      serial_number: "207D3591524B"
+      #front:
+      #  serial_number:'20713588524B'
+      #rear:
+      #  serial_number:'207D3591524B'
+

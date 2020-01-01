@@ -52,6 +52,29 @@ import odrive_interface
 od = odrive_interface.ODriveInterfaceAPI(active_odrive=odrv0)
 ```
 
+## Ros2
+
+example usage using params file
+`ros2 run odrive_ros odrive_node --ros-args --params-file params.yaml`
+
+example usage setting parame in cli
+`ros2 run odrive_ros odrive_node --ros-args -p "serial_number:=207D3591524B"`
+
+example connect
+`ros2 service call /connect_driver std_srvs/srv/Trigger`
+
+example disconnect
+`ros2 service call /disconnect_driver std_srvs/srv/Trigger`
+
+example engage
+`ros2 service call /engage_motors std_srvs/srv/Trigger`
+
+example release
+`ros2 service call /release_motors std_srvs/srv/Trigger`
+
+example sending `cmd_vel` message:
+`ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist '{linear: {x: 2.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'`
+`ros2 topic pub /cmd_vel geometry_msgs/msg/Twist '{linear: {x: 1.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}'`
 
 ## Acknowledgements
 

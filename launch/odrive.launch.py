@@ -60,6 +60,7 @@ def generate_launch_description():
             parameters=[{
                 'wheel_track': wheel_track,
                 'tyre_circumference': tire_circumference,
+                'serial_number':'207D3591524B',
                 'connect_on_startup': connect_on_startup,
                 'calibrate_on_startup': calibrate_on_startup,
                 'engage_on_startup': engage_on_startup,
@@ -68,7 +69,7 @@ def generate_launch_description():
             }],
             remappings=None,
             arguments=[],
-            name=""
+            name="",
             cwd=None,
             env=None
         )
