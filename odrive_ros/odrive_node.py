@@ -1,10 +1,16 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.executors import Executor, SingleThreadedExecutor, MultiThreadedExecutor
+
+from typing import Optional
 
 # import tf.transformations
 # import tf_conversions
 import tf2_ros
+
+import odrive_ros.transformations as transformations
 
 import std_msgs.msg
 from std_msgs.msg import Float64, Int32, String
@@ -55,10 +61,11 @@ class ROSLogger(object):
 
 # 1 m/s = 3.6 km/hr
 
+
 class ODriveNode(Node):
     
     def __init__(self):
-        super().__init__('odrive_node', namespace="kimbapkart", allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
+        super().__init__('odrive_node', namespace="", allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides=True)
         self._logger.info("Odrive Node Init")
         # print(self._parameters)
         # print(self.get_parameter('serial_number')._value)
@@ -86,41 +93,40 @@ class ODriveNode(Node):
         self.sim_mode = False
 
         try:
-            self.sim_mode             = self.get_parameter_or('simulation_mode', False)
-            self.serial_number        = self.get_parameter_or('serial_number', None)
-            self.publish_joint_angles = self.get_parameter_or('publish_joint_angles', True) # if self.sim_mode else False
-            self.publish_temperatures = self.get_parameter_or('publish_temperatures', True)
+            self.sim_mode             = self.better_get_parameter_or('simulation_mode', False).value
+            self.serial_number        = self.better_get_parameter_or('serial_number', None).value
+            self.publish_joint_angles = self.better_get_parameter_or('publish_joint_angles', True).value # if self.sim_mode else False
+            self.publish_temperatures = self.better_get_parameter_or('publish_temperatures', True).value
             
-            self.axis_for_right = float(self.get_parameter_or('axis_for_right', 0)) # if right calibrates first, this should be 0, else 1
-            self.wheel_track = float(self.get_parameter_or('wheel_track', 0.285)) # m, distance between wheel centres
-            self.tyre_circumference = float(self.get_parameter_or('tyre_circumference', 0.341)) # used to translate velocity commands in m/s into motor rpm
+            self.axis_for_right = self.better_get_parameter_or('axis_for_right', 0).value  # if right calibrates first, this should be 0, else 1
+            self.wheel_track = self.better_get_parameter_or('wheel_track', 0.285).value  # m, distance between wheel centres
+            self.tyre_circumference = self.better_get_parameter_or('tyre_circumference', 0.341).value  # used to translate velocity commands in m/s into motor rpm
             
-            self.connect_on_startup   = self.get_parameter_or('connect_on_startup', False)
-            self.calibrate_on_startup = self.get_parameter_or('calibrate_on_startup', False)
-            self.engage_on_startup    = self.get_parameter_or('engage_on_startup', False)
+            self.connect_on_startup   = self.better_get_parameter_or('connect_on_startup', False).value
+            self.calibrate_on_startup = self.better_get_parameter_or('calibrate_on_startup', False).value
+            self.engage_on_startup    = self.better_get_parameter_or('engage_on_startup', False).value
             
-            self.has_preroll     = self.get_parameter_or('use_preroll', False)
-                    
-            self.publish_current = self.get_parameter_or('publish_current', True)
-            self.publish_raw_odom =self.get_parameter_or('publish_raw_odom', True)
+            self.has_preroll     = self.better_get_parameter_or('use_preroll', False).value
             
-            self.publish_odom    = self.get_parameter_or('publish_odom', False)
-            self.publish_tf      = self.get_parameter_or('publish_odom_tf', False)
-            self.odom_topic      = self.get_parameter_or('odom_topic', "odom")
-            self.odom_frame      = self.get_parameter_or('odom_frame', "odom")
-            self.base_frame      = self.get_parameter_or('base_frame', "base_link")
-            self.odom_calc_hz    = self.get_parameter_or('odom_calc_hz', 10)
+            self.publish_current = self.better_get_parameter_or('publish_current', True).value
+            self.publish_raw_odom = self.better_get_parameter_or('publish_raw_odom', True).value
+            
+            self.publish_odom    = self.better_get_parameter_or('publish_odom', False).value
+            self.publish_tf      = self.better_get_parameter_or('publish_odom_tf', False).value
+            self.odom_topic      = self.better_get_parameter_or('odom_topic', "odom").value
+            self.odom_frame      = self.better_get_parameter_or('odom_frame', "odom").value
+            self.base_frame      = self.better_get_parameter_or('base_frame', "base_link").value
+            self.odom_calc_hz    = self.better_get_parameter_or('odom_calc_hz', 10).value
             
             rclpy.get_default_context().on_shutdown(self.terminate)
 
             
             self.create_service(std_srvs.srv.Trigger, 'connect_driver', self.connect_driver)
             self.create_service(std_srvs.srv.Trigger, 'disconnect_driver', self.disconnect_driver)
-        
             self.create_service(std_srvs.srv.Trigger, 'calibrate_motors', self.calibrate_motor)
             self.create_service(std_srvs.srv.Trigger, 'engage_motors', self.engage_motor)
             self.create_service(std_srvs.srv.Trigger, 'release_motors', self.release_motor)
-                    
+            
             # odometry update, disable during preroll, whenever wheels off ground 
             self.odometry_update_enabled = True
             self.create_service(std_srvs.srv.SetBool, 'enable_odometry_updates', self.enable_odometry_update_service)
@@ -236,15 +242,11 @@ class ODriveNode(Node):
             raise exc
 
         # start things up
-        self._logger.info("starting main loop")
-        self.main_loop()
-
-        
-    def main_loop(self):
+        self._logger.info("starting timers")
         # Main control, handle startup and error handling
         # while a ROS timer will handle the high-rate (~50Hz) comms + odometry calcs
-        print("creating rate")
-        main_rate = self.create_rate(10) # hz
+        # print("creating rate")
+        # main_rate = self.create_rate(10) # hz
         
         # Start timer to run high-rate comms
         print("creating fast timer")
@@ -253,12 +255,21 @@ class ODriveNode(Node):
         self.fast_timer_comms_active = False
         
         self.loop_timer = self.create_timer(0.25, self.loop_cb)
-        
+
+    def better_get_parameter_or(self, name: str, alternative_value: Optional[Parameter] = None) -> Parameter:
+        if alternative_value is None:
+            alternative_value = Parameter(name, Parameter.Type.NOT_SET)
+
+        res = self._parameters.get(name, alternative_value)
+        if not isinstance(res, Parameter):
+            res = Parameter(name, value=res)
+        return res
+
 
     def loop_cb(self):
         
         # TODO : findo out what happened to is_shutdown
-        self._logger.info("jumping into while...")
+        # self._logger.info("jumping into while...")
 
         # while self.context.ok():
         #try:
@@ -315,14 +326,11 @@ class ODriveNode(Node):
         # if self.publish_diagnostics:
         #    self.diagnostic_updater.setHardwareID(self.driver.get_version_string())
         
-        else:
-            print("just passin")
-            pass # loop around and try again
-        # print("somehow here now...")
 
     def fast_timer_cb(self):
 
-        time_now = self._clock.now()
+        time_now = self.get_clock().now()
+
         # in case of failure, assume some values are zero
         self.vel_l = 0
         self.vel_r = 0
@@ -341,6 +349,9 @@ class ODriveNode(Node):
             # print("timer comms active")
             try:
                 # check errors
+                if self.driver is None:
+                    self.fast_timer_comms_active = False
+                    return
                 error_string = self.driver.get_errors()
                 if error_string:
                     self.fast_timer_comms_active = False
@@ -385,19 +396,19 @@ class ODriveNode(Node):
         # as required by SLAM
         try:
             if self.publish_odom:
-                self.pub_odometry(time_now)
+                self.pub_odometry()
             if self.publish_temperatures:
                 self.pub_temperatures()
             if self.publish_current:
                 self.pub_current()
             if self.publish_joint_angles:
-                self.pub_joint_angles(time_now)
+                self.pub_joint_angles()
 
             # TODO add back in when ready
-            if self.publish_diagnostics:
-                self.diagnostic_updater.update()
+            #if self.publish_diagnostics:
+            #    self.diagnostic_updater.update()
         except Exception as exc:
-            print(exc)
+            self.get_logger().error(str(exc))
             self._logger.error("failed to pub")
         
         try:
@@ -498,7 +509,7 @@ class ODriveNode(Node):
             
             self.driver = ODriveClass(logger=ROSLogger(self))
             self._logger.info("Connecting to ODrive...")
-            if not self.driver.connect(serial_number=self.serial_number._value if self.serial_number is not None else self.serial_number, right_axis=self.axis_for_right):
+            if not self.driver.connect(serial_number=self.serial_number, right_axis=self.axis_for_right):
                 self.driver = None
                 self._logger.error("Failed to connect.")
                 resp.success = False
@@ -798,10 +809,10 @@ class ODriveNode(Node):
     #         self.left_current_accumulator = 0.0
     #         self.right_current_accumulator = 0.0
 
-    def pub_odometry(self, time_now):
-        now = time_now
-        self.odom_msg.header.stamp = now
-        self.tf_msg.header.stamp = now
+    def pub_odometry(self):
+        time_now = self.get_clock().now()
+        self.odom_msg.header.stamp = time_now.to_msg()
+        self.tf_msg.header.stamp = time_now.to_msg()
         
         wheel_track = self.wheel_track   # check these. Values in m
         tyre_circumference = self.tyre_circumference
@@ -878,7 +889,7 @@ class ODriveNode(Node):
         
         self.odom_msg.pose.pose.position.x = self.x
         self.odom_msg.pose.pose.position.y = self.y
-        q = tf_conversions.transformations.quaternion_from_euler(0.0, 0.0, self.theta)
+        q = transformations.quaternion_from_euler(0.0, 0.0, self.theta)
         self.odom_msg.pose.pose.orientation.z = q[2] # math.sin(self.theta)/2
         self.odom_msg.pose.pose.orientation.w = q[3] # math.cos(self.theta)/2
     
@@ -910,9 +921,10 @@ class ODriveNode(Node):
         if self.publish_tf:
             self.tf_publisher.sendTransform(self.tf_msg)            
     
-    def pub_joint_angles(self, time_now):
+    def pub_joint_angles(self):
+        time_now = self.get_clock().now()
         jsm = self.joint_state_msg
-        jsm.header.stamp = time_now
+        jsm.header.stamp = time_now.to_msg()
         if self.driver:
             jsm.position[0] = 2*math.pi * self.new_pos_l  / self.encoder_cpr
             jsm.position[1] = 2*math.pi * self.new_pos_r / self.encoder_cpr
@@ -926,10 +938,14 @@ def main(args=None):
 
     odn = ODriveNode()
     try:
-        rclpy.spin(odn)
+        #rclpy.spin(odn)
+        executor = MultiThreadedExecutor(num_threads=2)
+        executor.add_node(odn)
+        executor.spin()
     except KeyboardInterrupt:
         print("exiting")
     finally:
+        executor.shutdown()
         odn.destroy_node()
         rclpy.shutdown()
 

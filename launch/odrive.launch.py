@@ -17,9 +17,9 @@ def generate_launch_description():
                                             default=os.path.join(odrive_prefix, 'config'))
     #config_file_path = os.path.join(get_package_share_directory('odrive_ros', 'config', 'config.yaml'))
 
-    connect_on_startup = LaunchConfiguration("connect_on_startup", default=True)
-    calibrate_on_startup = LaunchConfiguration("calibrate_on_startup", default=True)
-    engage_on_startup = LaunchConfiguration("engage_on_startup", default=True)
+    connect_on_startup = LaunchConfiguration("connect_on_startup", default=False)
+    calibrate_on_startup = LaunchConfiguration("calibrate_on_startup", default=False)
+    engage_on_startup = LaunchConfiguration("engage_on_startup", default=False)
     publish_odom = LaunchConfiguration("publish_odom", default=True)
     publish_odom_tf = LaunchConfiguration("publish_odom_tf", default=True)
 
@@ -60,7 +60,7 @@ def generate_launch_description():
             parameters=[{
                 'wheel_track': wheel_track,
                 'tyre_circumference': tire_circumference,
-                'serial_number':'207D3591524B',
+                'serial_number':'20713588524B',
                 'connect_on_startup': connect_on_startup,
                 'calibrate_on_startup': calibrate_on_startup,
                 'engage_on_startup': engage_on_startup,

@@ -281,6 +281,8 @@ class ODriveInterfaceAPI(object):
         #    raise ODriveFailure(str(e))
         
     def feed_watchdog(self):
+        if not self.driver:
+            return None
         self.left_axis.watchdog_feed()
         self.right_axis.watchdog_feed()
         
